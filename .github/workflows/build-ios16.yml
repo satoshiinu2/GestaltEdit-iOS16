@@ -5,69 +5,92 @@ on:
   push:
     branches:
       - main
+
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: List installed Xcode versions
-        run: |
-          ls -la /Applications | grep Xcode || true
-          xcodebuild -version
-          xcodebuild -showsdks
-
-      - name: Check Xcode and SDK
+      - name: Show Xcode version
         run: |
           xcodebuild -version
-          xcodebuild -showsdks
-          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
-          echo "iOS SDK: $SDK"
-        true 
-          xcodebuild -version
-          xcodebuild -showsdks
-      - name: Check Xcode and SDK
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Reconstruct Xcode project layout
         run: |
-          xcodebuild -version
-          xcodebuild -showsdks
-          
-          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
-          echo "iOS SDK: $SDK"
+          set -euo pipefail
 
-          case "$SDK" in
-            16.*) echo "iOS 16 SDK detected" ;;
-            *) echo "ERROR: iOS 16 SDK not available"; exit 1 ;;
-          esac
+          # The repository stores the project files flat at the root.
+          # Recreate the layout project.pbxproj expects:
+          #   GestaltEdit.xcodeproj/project.pbxproj
+          #   GestaltEdit/<sources>
+          #   GestaltEdit/Assets.xcassets/AppIcon.appiconset/<icons>
+          mkdir -p GestaltEdit.xcodeproj/project.xcworkspace
+          mkdir -p GestaltEdit/Assets.xcassets/AppIcon.appiconset
 
-      - name: Build
+          mv project.pbxproj GestaltEdit.xcodeproj/
+          mv contents.xcworkspacedata GestaltEdit.xcodeproj/project.xcworkspace/
+
+          mv AutomationCommand.swift BadQueryBridge.h BadQueryBridge.m \
+             ContentView.swift GestaltAccess.h GestaltAccess.m \
+             GestaltBackupStore.swift GestaltEdit-Bridging-Header.h \
+             GestaltEditApp.swift GestaltModels.swift GestaltTweaks.swift \
+             GestaltViewModel.swift NeoSpringView.swift \
+             PlacardIcon.png RewardCode.jpg SUSSAvatar.jpg \
+             GestaltEdit/
+
+          mv Contents.json Icon-*.png GestaltEdit/Assets.xcassets/AppIcon.appiconset/
+
+      - name: Add asset catalog to Resources phase
         run: |
-          mkdir -p "$RUNNER_TEMP/build"
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("GestaltEdit.xcodeproj/project.pbxproj")
+          s = p.read_text()
+          build_file = '\t\tB10000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000030 /* Assets.xcassets */; };\n'
+          anchor = "/* Begin PBXBuildFile section */\n"
+          res_anchor = "\t\t\t94B723FE994BB4C703F0207E /* PlacardIcon.png in Resources */,\n"
+          if "Assets.xcassets in Resources" not in s and anchor in s and res_anchor in s:
+              s = s.replace(anchor, anchor + build_file, 1)
+              s = s.replace(res_anchor, res_anchor + "\t\t\tB10000000000000000000001 /* Assets.xcassets in Resources */,\n", 1)
+              p.write_text(s)
+              print("Assets.xcassets added to Resources phase")
+          else:
+              print("pbxproj anchors not found; leaving project unchanged")
+          PY
 
-          xcodebuild archive \
+      - name: Build (unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild build \
             -project GestaltEdit.xcodeproj \
-            -scheme GestaltEdit \
+            -target GestaltEdit \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/build/GestaltEdit.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            SWIFT_VERSION=5.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Create IPA
         run: |
-          APP="$RUNNER_TEMP/build/GestaltEdit.xcarchive/Products/Applications/GestaltEdit.app"
-
+          set -euo pipefail
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/GestaltEdit.app"
+          test -d "$APP"
           mkdir -p "$RUNNER_TEMP/Payload"
-          cp -R "$APP" "$RUNNER_TEMP/Payload/GestaltEdit.app"
-
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
           cd "$RUNNER_TEMP"
-          zip -r GestaltEdit-iOS16-unsigned.ipa Payload
+          zip -qry GestaltEdit-iOS16-unsigned.ipa Payload
+          ls -lh GestaltEdit-iOS16-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: GestaltEdit-iOS16-unsigned
           path: ${{ runner.temp }}/GestaltEdit-iOS16-unsigned.ipa
+          if-no-files-found: error
