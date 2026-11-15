@@ -71,7 +71,7 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            SYMROOT="$RUNNER_TEMP/Build" \
             SWIFT_VERSION=5.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
@@ -80,7 +80,7 @@ jobs:
       - name: Create IPA
         run: |
           set -euo pipefail
-          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/GestaltEdit.app"
+          APP="$RUNNER_TEMP/Build/Release-iphoneos/GestaltEdit.app"
           test -d "$APP"
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$APP" "$RUNNER_TEMP/Payload/"
